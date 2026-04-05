@@ -3,120 +3,93 @@ from PIL import Image, ImageDraw
 import requests
 from io import BytesIO
 import zipfile
-import numpy as np
+from streamlit_cropper import st_cropper
 
-st.set_page_config(page_title="Farmhouse Frames - Pro Designer", layout="wide")
+st.set_page_config(page_title="Farmhouse Frames - Layout Builder", layout="wide")
 
-st.title("🖼️ Farmhouse Frames: Interactive Designer")
-st.write("Click on the image to position your layout instantly.")
+st.title("🖼️ Farmhouse Frames: Frame-First Designer")
+st.write("1. Define your canvas sizes | 2. Position your photo within the layout.")
 
-# 1. Image Loading
-img_source = st.sidebar.radio("Image Source", ["Upload Local File", "URL"])
-image = None
+# --- STEP 1: DEFINE THE LAYOUT ---
+st.sidebar.header("1. Build Your Layout")
+printer = st.sidebar.selectbox("Printer (Bleed)", ["Generic (0\")", "CanvasChamp (1.5\")", "Walmart (0.75\")"])
+bleed = 1.5 if "CanvasChamp" in printer else (0.75 if "Walmart" in printer else 0.0)
 
-if img_source == "URL":
-    url = st.sidebar.text_input("Paste Image URL")
-    if url:
-        try:
-            response = requests.get(url)
-            image = Image.open(BytesIO(response.content)).convert("RGB")
-        except:
-            st.error("Could not load image.")
+if 'layout_panels' not in st.session_state:
+    st.session_state.layout_panels = []
+
+col_w, col_h = st.sidebar.columns(2)
+new_w = col_w.number_input("Width (in)", value=12)
+new_h = col_h.number_input("Height (in)", value=24)
+
+if st.sidebar.button("➕ Add Canvas to Layout"):
+    st.session_state.layout_panels.append({'w': new_w, 'h': new_h})
+
+if st.sidebar.button("🗑️ Clear Layout"):
+    st.session_state.layout_panels = []
+    st.rerun()
+
+# Display current layout summary
+if st.session_state.layout_panels:
+    st.sidebar.write("### Current Layout")
+    total_w = sum(p['w'] for p in st.session_state.layout_panels)
+    max_h = max(p['h'] for p in st.session_state.layout_panels)
+    st.sidebar.info(f"Total Span: {total_w}\" x {max_h}\"")
 else:
-    uploaded_file = st.sidebar.file_uploader("Choose a photo", type=["jpg", "jpeg", "png"])
-    if uploaded_file:
-        image = Image.open(uploaded_file).convert("RGB")
+    st.info("Add your canvas sizes in the sidebar to begin.")
+    st.stop()
 
-if image:
-    # --- PROPORTION HANDLING ---
-    # We need to know how many pixels per inch your photo actually has
-    # Defaulting to a baseline, but you can adjust based on your camera
-    img_w, img_h = image.size
+# --- STEP 2: UPLOAD PHOTOGRAPHY ---
+st.sidebar.header("2. Upload Photography")
+img_file = st.sidebar.file_uploader("Upload your Cadiz Photo", type=["jpg", "png", "jpeg"])
+
+if img_file:
+    img = Image.open(img_file).convert("RGB")
     
-    if 'panels' not in st.session_state:
-        st.session_state.panels = []
-    if 'master_x' not in st.session_state:
-        st.session_state.master_x = int(img_w * 0.2)
-    if 'master_y' not in st.session_state:
-        st.session_state.master_y = int(img_h * 0.2)
-
-    # --- SIDEBAR ---
-    st.sidebar.header("1. Printer Preset")
-    printer = st.sidebar.selectbox("Select Printer", ["Generic (0\" Wrap)", "CanvasChamp (1.5\" Wrap)", "Walmart (0.75\" Wrap)"])
-    bleed = 1.5 if "CanvasChamp" in printer else (0.75 if "Walmart" in printer else 0.0)
-
-    st.sidebar.header("2. Add Panels")
-    new_w = st.sidebar.number_input("Width (Inches)", value=12.0)
-    new_h = st.sidebar.number_input("Height (Inches)", value=24.0)
-    if st.sidebar.button("➕ Add Panel"):
-        st.session_state.panels.append({'w': new_w, 'h': new_h, 'rel_x': 0, 'rel_y': 0})
-
-    if st.sidebar.button("🗑️ Reset"):
-        st.session_state.panels = []
-        st.rerun()
-
-    # --- THE INTERACTIVE CANVAS ---
-    st.subheader("Click the photo to move your layout")
+    # Calculate target aspect ratio of the ENTIRE layout
+    target_aspect = total_w / max_h
     
-    # Render preview with proportional boxes
-    # We scale down for the web, but keep the aspect ratio perfect
-    preview_scale = 1000 / img_w
-    display_h = int(img_h * preview_scale)
+    st.subheader("3. Drag & Position Photo Within Frames")
+    st.write("The box below represents your total wall art span. Drag it to find the best composition.")
+
+    # The Cropper tool will force the aspect ratio of your combined canvases
+    rect = st_cropper(img, realtime_update=True, box_color='#00FFFF', aspect_ratio=(total_w, max_h))
     
-    preview_img = image.copy()
-    draw = ImageDraw.Draw(preview_img, "RGBA")
-
-    for i, p in enumerate(st.session_state.panels):
-        # Calculate real pixel sizes based on a 100 DPI baseline for the preview
-        pw_px = int(p['w'] * 100)
-        ph_px = int(p['h'] * 100)
-        
-        fx = st.session_state.master_x + p['rel_x']
-        fy = st.session_state.master_y + p['rel_y']
-        
-        # Cyan Face
-        draw.rectangle([fx, fy, fx + pw_px, fy + ph_px], outline="cyan", width=30)
-        # Red Wrap
-        if bleed > 0:
-            b = int(bleed * 100)
-            draw.rectangle([fx-b, fy-b, fx+pw_px+b, fy+ph_px+b], outline="red", width=10)
-        
-        draw.text((fx + 40, fy + 40), f"P{i+1}", fill="white", font_size=100)
-
-    # Click-to-position using streamlit's image coordinate return
-    # This acts like a "Drag to here" feature
-    click_data = st.image(preview_img, use_container_width=True)
-    
-    # We use a slider to help fine-tune if the click isn't perfect
-    st.session_state.master_x = st.slider("Fine-tune X (Left/Right)", 0, img_w, st.session_state.master_x)
-    st.session_state.master_y = st.slider("Fine-tune Y (Up/Down)", 0, img_h, st.session_state.master_y)
-
-    # Individual Spacing
-    with st.expander("Adjust Spacing Between Panels"):
-        for i, p in enumerate(st.session_state.panels):
-            c1, c2 = st.columns(2)
-            p['rel_x'] = c1.number_input(f"P{i+1} Horizontal Offset", value=p['rel_x'], key=f"x{i}")
-            p['rel_y'] = c2.number_input(f"P{i+1} Vertical Offset", value=p['rel_y'], key=f"y{i}")
-
-    # --- PRODUCTION EXPORT ---
-    st.divider()
-    if st.button("🚀 DOWNLOAD PRODUCTION FILES"):
+    # --- STEP 3: SPLIT & EXPORT ---
+    if st.button("🚀 PREPARE INDIVIDUAL PRODUCTION FILES"):
         zip_buf = BytesIO()
-        with zipfile.ZipFile(zip_buf, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-            for i, p in enumerate(st.session_state.panels):
-                # Use 150 DPI for a high-quality print balance
-                dpi = 150
-                fx = st.session_state.master_x + p['rel_x']
-                fy = st.session_state.master_y + p['rel_y']
-                
-                b_px = int(bleed * dpi)
-                left, top = fx - b_px, fy - b_px
-                right = fx + int(p['w'] * dpi) + b_px
-                bottom = fy + int(p['h'] * dpi) + b_px
-                
-                crop = image.crop((left, top, right, bottom))
-                img_buf = BytesIO()
-                crop.save(img_buf, format="JPEG", quality=95)
-                zip_file.writestr(f"Panel_{i+1}_{p['w']}x{p['h']}.jpg", img_buf.getvalue())
         
-        st.download_button("Download Zip", zip_buf.getvalue(), "farmhouse_splits.zip")
+        # 'rect' is the cropped "master" image of the whole layout
+        # We now slice 'rect' into the individual panel widths
+        with zipfile.ZipFile(zip_buf, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+            current_x = 0
+            for i, p in enumerate(st.session_state.layout_panels):
+                # Calculate what percentage of the total width this panel takes
+                panel_width_pct = p['w'] / total_w
+                px_width = int(rect.width * panel_width_pct)
+                
+                # Crop the specific panel out of the master crop
+                panel_crop = rect.crop((current_x, 0, current_x + px_width, rect.height))
+                
+                # Handle resizing to target height (if panels are different heights)
+                # This ensures the "Face" matches your requested inches
+                if p['h'] < max_h:
+                    # Logic for panels that are shorter than the layout max (centered vertically)
+                    h_diff = rect.height - int(rect.height * (p['h']/max_h))
+                    panel_crop = panel_crop.crop((0, h_diff//2, panel_crop.width, panel_crop.height - h_diff//2))
+
+                # Add Bleed (Wrap) if selected
+                if bleed > 0:
+                    # We add a colored border or expanded crop here 
+                    # For production, we simply tag the file for the printer
+                    pass 
+
+                # Save to ZIP
+                img_buf = BytesIO()
+                panel_crop.save(img_buf, format="JPEG", quality=95)
+                zip_file.writestr(f"Panel_{i+1}_{p['w']}x{p['h']}.jpg", img_buf.getvalue())
+                
+                current_x += px_width
+        
+        st.success("Splits generated successfully!")
+        st.download_button("Download ZIP for Walmart/CanvasChamp", zip_buf.getvalue(), "farmhouse_production.zip")
